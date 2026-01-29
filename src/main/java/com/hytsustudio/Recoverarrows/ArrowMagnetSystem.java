@@ -18,6 +18,7 @@ import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
 import com.hypixel.hytale.server.core.inventory.transaction.ItemStackTransaction;
 import com.hypixel.hytale.server.core.modules.entity.EntityModule;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
+import com.hypixel.hytale.server.core.modules.entity.component.UUIDComponent;
 import com.hypixel.hytale.server.core.modules.physics.component.Velocity;
 import com.hypixel.hytale.server.core.modules.projectile.component.Projectile;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
@@ -43,11 +44,11 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
     private static final double PICKUP_RADIUS = 2.5;
     private static final double PICKUP_RADIUS_SQ = PICKUP_RADIUS * PICKUP_RADIUS;
 
-    private static final int PICKUP_DELAY_TICKS = 10;
-    private static final int REQUIRED_STATIONARY_TICKS = 5;
+    private static final int PICKUP_DELAY_TICKS = 0;
+    private static final int REQUIRED_STATIONARY_TICKS = 3;
     private static final double STOP_SPEED_THRESHOLD = 0.05;
 
-    private static final int SCAN_INTERVAL_TICKS = 5;
+    private static final int SCAN_INTERVAL_TICKS = 2;
     private static final boolean OWNER_ONLY_PICKUP = true;
 
     private static final String DEFAULT_ARROW_ID = "Weapon_Arrow_Crude";
@@ -107,6 +108,9 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
             return;
         }
 
+        EntityStore entityStore = (EntityStore) store.getExternalData();
+        if (entityStore == null) return;
+
         SpatialResource<Ref<EntityStore>, EntityStore> spatial =
                 (SpatialResource<Ref<EntityStore>, EntityStore>)
                         store.getResource(EntityModule.get().getEntitySpatialResourceType());
@@ -119,21 +123,33 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
         structure.collect(playerPos, SEARCH_RADIUS, nearby);
 
         for (Ref<EntityStore> ref : nearby) {
-            if (ref == null || ref.equals(playerRef)) continue;
+            if (ref == null || !ref.isValid() || ref.equals(playerRef)) continue;
+
+            UUIDComponent uuidComponent =
+                    (UUIDComponent) store.getComponent(ref, UUIDComponent.getComponentType());
+            if (uuidComponent == null || uuidComponent.getUuid() == null) continue;
+
+            UUID arrowUuid = uuidComponent.getUuid();
+
+            Ref<EntityStore> arrowRef = entityStore.getRefFromUUID(arrowUuid);
+            if (arrowRef == null || !arrowRef.isValid()) {
+                trackers.remove(arrowUuid);
+                continue;
+            }
 
             Projectile projectile =
-                    (Projectile) store.getComponent(ref, Projectile.getComponentType());
+                    (Projectile) store.getComponent(arrowRef, Projectile.getComponentType());
             if (projectile == null) continue;
 
             TransformComponent arrowTransform =
-                    (TransformComponent) store.getComponent(ref, TransformComponent.getComponentType());
+                    (TransformComponent) store.getComponent(arrowRef, TransformComponent.getComponentType());
             if (arrowTransform == null) {
-                trackers.remove(ref);
+                trackers.remove(arrowUuid);
                 continue;
             }
 
             Velocity vel =
-                    (Velocity) store.getComponent(ref, Velocity.getComponentType());
+                    (Velocity) store.getComponent(arrowRef, Velocity.getComponentType());
             if (vel == null) continue;
 
             Vector3d arrowPos = arrowTransform.getPosition();
@@ -142,10 +158,10 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
 
             double speed = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 
-            Tracker tracker = trackers.get(ref);
+            Tracker tracker = trackers.get(arrowUuid);
             if (tracker == null) {
-                tracker = new Tracker(ref, playerUuid, tickCounter);
-                trackers.put(ref, tracker);
+                tracker = new Tracker(arrowUuid, playerUuid, tickCounter);
+                trackers.put(arrowUuid, tracker);
             }
 
             tracker.update(speed);
@@ -160,8 +176,8 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
             String arrowId = lastArrowEquipped.getOrDefault(playerUuid, DEFAULT_ARROW_ID);
 
             if (tryGiveArrow(player, arrowId)) {
-                cmd.tryRemoveEntity(ref, RemoveReason.REMOVE);
-                trackers.remove(ref);
+                cmd.tryRemoveEntity(arrowRef, RemoveReason.REMOVE);
+                trackers.remove(arrowUuid);
                 player.sendInventory();
                 break;
             }
@@ -212,20 +228,19 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
     }
 
     private void cleanupDeadTrackers(Store<EntityStore> store) {
-        Iterator<Map.Entry<Ref<EntityStore>, Tracker>> it =
+        EntityStore entityStore = (EntityStore) store.getExternalData();
+        if (entityStore == null) return;
+
+        Iterator<Map.Entry<UUID, Tracker>> it =
                 trackers.entrySet().iterator();
 
         while (it.hasNext()) {
-            Map.Entry<Ref<EntityStore>, Tracker> entry = it.next();
-            Ref<EntityStore> ref = entry.getKey();
+            Map.Entry<UUID, Tracker> entry = it.next();
+            UUID arrowUuid = entry.getKey();
 
             // 🔒 HARD SAFETY CHECKS
+            Ref<EntityStore> ref = entityStore.getRefFromUUID(arrowUuid);
             if (ref == null || !ref.isValid()) {
-                it.remove();
-                continue;
-            }
-
-            if (!store.has(ref)) {
                 it.remove();
             }
         }
@@ -243,14 +258,14 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
        ======================= */
 
     private static final class Tracker {
-        final Ref<EntityStore> arrowRef;
+        final UUID arrowUuid;
         final UUID ownerUuid;
         final int spawnTick;
 
         int stationaryTicks = 0;
 
-        Tracker(Ref<EntityStore> arrowRef, UUID ownerUuid, int spawnTick) {
-            this.arrowRef = arrowRef;
+        Tracker(UUID arrowUuid, UUID ownerUuid, int spawnTick) {
+            this.arrowUuid = arrowUuid;
             this.ownerUuid = ownerUuid;
             this.spawnTick = spawnTick;
         }
