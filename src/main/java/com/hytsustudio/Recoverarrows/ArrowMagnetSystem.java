@@ -56,7 +56,7 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
        STATE
        ======================= */
 
-    private final Map<Ref<EntityStore>, Tracker> trackers = new HashMap<>();
+    private final Map<UUID, Tracker> trackers = new HashMap<>();
     private final Map<UUID, String> lastArrowEquipped = new HashMap<>();
 
     private int tickCounter = 0;
@@ -212,12 +212,22 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
     }
 
     private void cleanupDeadTrackers(Store<EntityStore> store) {
-        Iterator<Map.Entry<Ref<EntityStore>, Tracker>> it = trackers.entrySet().iterator();
+        Iterator<Map.Entry<Ref<EntityStore>, Tracker>> it =
+                trackers.entrySet().iterator();
+
         while (it.hasNext()) {
-            Ref<EntityStore> ref = it.next().getKey();
-            TransformComponent t =
-                    (TransformComponent) store.getComponent(ref, TransformComponent.getComponentType());
-            if (t == null) it.remove();
+            Map.Entry<Ref<EntityStore>, Tracker> entry = it.next();
+            Ref<EntityStore> ref = entry.getKey();
+
+            // 🔒 HARD SAFETY CHECKS
+            if (ref == null || !ref.isValid()) {
+                it.remove();
+                continue;
+            }
+
+            if (!store.has(ref)) {
+                it.remove();
+            }
         }
     }
 
