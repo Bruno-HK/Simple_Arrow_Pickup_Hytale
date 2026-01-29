@@ -20,16 +20,21 @@ import it.unimi.dsi.fastutil.objects.ObjectList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Arrow pickup system that keeps arrows in-world until they settle and a nearby player can collect them.
  */
 public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
 
+    private static final Logger LOGGER = Logger.getLogger(ArrowMagnetSystem.class.getName());
+
     private static final double PICKUP_RADIUS = 2.5;
     private static final double PICKUP_RADIUS_SQUARED = PICKUP_RADIUS * PICKUP_RADIUS;
     private static final int PICKUP_DELAY_TICKS = 20;
     private static final int REQUIRED_STATIONARY_TICKS = 10;
+    private static final boolean OWNER_ONLY_PICKUP = true;
     private static final int SCAN_INTERVAL_TICKS = 5;
 
     private final Map<Ref<EntityStore>, ArrowTracker> trackers = new HashMap<>();
@@ -69,28 +74,35 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
         }
 
         Vector3d position = transform.getPosition();
+        if (position == null) {
+            return;
+        }
         Ref<EntityStore> arrowRef = chunk.getReferenceTo(index);
+        if (!store.isEntityAlive(arrowRef)) {
+            trackers.remove(arrowRef);
+            return;
+        }
         long currentTick = store.getTick();
 
         ArrowTracker tracker = trackers.get(arrowRef);
         if (tracker == null) {
+            Ref<EntityStore> ownerRef = resolveShooterRef(projectile);
             tracker = new ArrowTracker(
                     arrowRef,
                     currentTick,
                     position,
                     REQUIRED_STATIONARY_TICKS,
-                    PICKUP_DELAY_TICKS
+                    PICKUP_DELAY_TICKS,
+                    ownerRef
             );
             trackers.put(arrowRef, tracker);
         } else {
             tracker.update(position, currentTick);
         }
 
-        boolean shouldScan = shouldScan(currentTick);
-        if (shouldScan) {
-            cleanupTrackersIfNeeded(store, currentTick);
-        }
+        cleanupTrackersIfNeeded(store, currentTick);
 
+        boolean shouldScan = shouldScan(currentTick);
         if (!tracker.isPickupReady(currentTick) || !shouldScan) {
             return;
         }
@@ -112,6 +124,10 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
                 continue;
             }
 
+            if (!store.isEntityAlive(playerRef)) {
+                continue;
+            }
+
             TransformComponent playerTransform =
                     store.getComponent(playerRef, TransformComponent.getComponentType());
             if (playerTransform == null) {
@@ -120,6 +136,10 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
 
             Vector3d playerPosition = playerTransform.getPosition();
             if (distanceSquared(position, playerPosition) > PICKUP_RADIUS_SQUARED) {
+                continue;
+            }
+
+            if (!isPickupAllowed(playerRef, tracker)) {
                 continue;
             }
 
@@ -160,6 +180,49 @@ public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
             if (!store.isEntityAlive(ref)) {
                 iterator.remove();
             }
+        }
+    }
+
+    private static boolean isPickupAllowed(Ref<EntityStore> playerRef, ArrowTracker tracker) {
+        if (!OWNER_ONLY_PICKUP) {
+            return true;
+        }
+        Ref<EntityStore> ownerRef = tracker.getOwnerRef();
+        if (ownerRef == null) {
+            return true;
+        }
+        return ownerRef.equals(playerRef);
+    }
+
+    private static Ref<EntityStore> resolveShooterRef(ProjectileComponent projectile) {
+        Ref<EntityStore> ownerRef = tryResolveRef(projectile, "getOwner");
+        if (ownerRef != null) {
+            return ownerRef;
+        }
+        ownerRef = tryResolveRef(projectile, "getShooter");
+        if (ownerRef != null) {
+            return ownerRef;
+        }
+        ownerRef = tryResolveRef(projectile, "getOwnerRef");
+        if (ownerRef != null) {
+            return ownerRef;
+        }
+        return tryResolveRef(projectile, "getShooterRef");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Ref<EntityStore> tryResolveRef(ProjectileComponent projectile, String methodName) {
+        try {
+            Object value = projectile.getClass().getMethod(methodName).invoke(projectile);
+            if (value instanceof Ref) {
+                return (Ref<EntityStore>) value;
+            }
+            return null;
+        } catch (NoSuchMethodException ignored) {
+            return null;
+        } catch (ReflectiveOperationException ex) {
+            LOGGER.log(Level.WARNING, "ArrowMagnetSystem: failed to resolve shooter reference", ex);
+            return null;
         }
     }
 

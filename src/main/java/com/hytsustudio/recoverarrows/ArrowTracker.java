@@ -14,6 +14,7 @@ public final class ArrowTracker {
 
     private final Ref<EntityStore> arrowRef;
     private final long spawnTick;
+    private final Ref<EntityStore> ownerRef;
     private final int requiredStationaryTicks;
     private final int pickupDelayTicks;
 
@@ -26,12 +27,14 @@ public final class ArrowTracker {
             long spawnTick,
             Vector3d initialPosition,
             int requiredStationaryTicks,
-            int pickupDelayTicks
+            int pickupDelayTicks,
+            Ref<EntityStore> ownerRef
     ) {
         this.arrowRef = arrowRef;
         this.spawnTick = spawnTick;
         this.requiredStationaryTicks = requiredStationaryTicks;
         this.pickupDelayTicks = pickupDelayTicks;
+        this.ownerRef = ownerRef;
         this.lastPosition = copyPosition(initialPosition);
         this.stationaryTicks = 0;
         this.stoppedTick = -1;
@@ -43,6 +46,10 @@ public final class ArrowTracker {
 
     public long getSpawnTick() {
         return spawnTick;
+    }
+
+    public Ref<EntityStore> getOwnerRef() {
+        return ownerRef;
     }
 
     public void update(Vector3d position, long tick) {
