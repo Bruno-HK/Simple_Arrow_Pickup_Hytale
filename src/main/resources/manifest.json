@@ -1,0 +1,15 @@
+{
+    "Group": "HytsuStudio",
+    "Name": "ArrowPickup",
+    "Version": "unspecified",
+    "Description": "Makes arrows persistent and pickable.",
+    "Authors": [
+        {
+            "Name": "HytsuStudio"
+        }
+    ],
+    "ServerVersion": "*",
+    "DisabledByDefault": false,
+    "IncludesAssetPack": false,
+    "Main": "com.hytsustudio.arrowpickup.ArrowPickupPlugin"
+}
