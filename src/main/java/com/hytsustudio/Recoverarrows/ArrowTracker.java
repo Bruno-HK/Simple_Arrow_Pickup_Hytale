@@ -2,100 +2,104 @@ package com.hytsustudio.Recoverarrows;
 
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.math.vector.Vector3d;
-import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * Pure logic tracker for arrow movement and pickup readiness.
+ * Tracks projectile arrows and decides when they are "embedded" (stopped)
+ * and when they become pickup-ready.
+ *
+ * This class does NOT touch inventory, sounds, or entity removal.
  */
 public final class ArrowTracker {
 
+    // If an arrow position barely changes for a few ticks, treat as "stopped"
     private static final double POSITION_EPSILON = 0.001;
     private static final double POSITION_EPSILON_SQUARED = POSITION_EPSILON * POSITION_EPSILON;
 
-    private final Ref<EntityStore> arrowRef;
-    private final long spawnTick;
-    private final Ref<EntityStore> ownerRef;
+    public static final class TrackedArrow {
+        public final Ref<?> arrowRef;
+
+        public Vector3d lastPos;
+        public int stationaryTicks;
+        public long stoppedTick;
+
+        public TrackedArrow(Ref<?> arrowRef, Vector3d initialPos) {
+            this.arrowRef = arrowRef;
+            this.lastPos = copy(initialPos);
+            this.stationaryTicks = 0;
+            this.stoppedTick = -1;
+        }
+    }
+
+    private final Map<Ref<?>, TrackedArrow> tracked = new HashMap<>();
+
     private final int requiredStationaryTicks;
     private final int pickupDelayTicks;
 
-    private Vector3d lastPosition;
-    private int stationaryTicks;
-    private long stoppedTick;
-
-    public ArrowTracker(
-            Ref<EntityStore> arrowRef,
-            long spawnTick,
-            Vector3d initialPosition,
-            int requiredStationaryTicks,
-            int pickupDelayTicks,
-            Ref<EntityStore> ownerRef
-    ) {
-        this.arrowRef = arrowRef;
-        this.spawnTick = spawnTick;
+    public ArrowTracker(int requiredStationaryTicks, int pickupDelayTicks) {
         this.requiredStationaryTicks = requiredStationaryTicks;
         this.pickupDelayTicks = pickupDelayTicks;
-        this.ownerRef = ownerRef;
-        this.lastPosition = copyPosition(initialPosition);
-        this.stationaryTicks = 0;
-        this.stoppedTick = -1;
     }
 
-    public Ref<EntityStore> getArrowRef() {
-        return arrowRef;
+    public void trackIfMissing(Ref<?> arrowRef, Vector3d currentPos) {
+        tracked.computeIfAbsent(arrowRef, r -> new TrackedArrow(r, currentPos));
     }
 
-    public long getSpawnTick() {
-        return spawnTick;
+    public void untrack(Ref<?> arrowRef) {
+        tracked.remove(arrowRef);
     }
 
-    public Ref<EntityStore> getOwnerRef() {
-        return ownerRef;
+    public TrackedArrow get(Ref<?> arrowRef) {
+        return tracked.get(arrowRef);
     }
 
-    public void update(Vector3d position, long tick) {
-        if (position == null || lastPosition == null) {
-            lastPosition = copyPosition(position);
-            stationaryTicks = 0;
-            stoppedTick = -1;
+    public boolean isStopped(TrackedArrow a) {
+        return a != null && a.stationaryTicks >= requiredStationaryTicks;
+    }
+
+    public boolean isPickupReady(TrackedArrow a, long tick) {
+        if (a == null) return false;
+        if (!isStopped(a)) return false;
+        if (a.stoppedTick < 0) return false;
+        return (tick - a.stoppedTick) >= pickupDelayTicks;
+    }
+
+    public void update(TrackedArrow a, Vector3d currentPos, long tick) {
+        if (a == null) return;
+
+        if (currentPos == null || a.lastPos == null) {
+            a.lastPos = copy(currentPos);
+            a.stationaryTicks = 0;
+            a.stoppedTick = -1;
             return;
         }
 
-        double distanceSquared = distanceSquared(position, lastPosition);
-        if (distanceSquared <= POSITION_EPSILON_SQUARED) {
-            stationaryTicks++;
-            if (stationaryTicks >= requiredStationaryTicks && stoppedTick < 0) {
-                stoppedTick = tick;
+        double d2 = dist2(currentPos, a.lastPos);
+
+        if (d2 <= POSITION_EPSILON_SQUARED) {
+            a.stationaryTicks++;
+            if (a.stationaryTicks >= requiredStationaryTicks && a.stoppedTick < 0) {
+                a.stoppedTick = tick;
             }
         } else {
-            stationaryTicks = 0;
-            stoppedTick = -1;
+            a.stationaryTicks = 0;
+            a.stoppedTick = -1;
         }
 
-        lastPosition = copyPosition(position);
+        a.lastPos = copy(currentPos);
     }
 
-    public boolean isStopped() {
-        return stationaryTicks >= requiredStationaryTicks;
+    private static double dist2(Vector3d a, Vector3d b) {
+        double dx = a.getX() - b.getX();
+        double dy = a.getY() - b.getY();
+        double dz = a.getZ() - b.getZ();
+        return dx * dx + dy * dy + dz * dz;
     }
 
-    public boolean isPickupReady(long tick) {
-        if (!isStopped() || stoppedTick < 0) {
-            return false;
-        }
-        return (tick - stoppedTick) >= pickupDelayTicks;
-    }
-
-    private static double distanceSquared(Vector3d first, Vector3d second) {
-        double dx = first.getX() - second.getX();
-        double dy = first.getY() - second.getY();
-        double dz = first.getZ() - second.getZ();
-        return (dx * dx) + (dy * dy) + (dz * dz);
-    }
-
-    private static Vector3d copyPosition(Vector3d position) {
-        if (position == null) {
-            return null;
-        }
-        return new Vector3d(position.getX(), position.getY(), position.getZ());
+    private static Vector3d copy(Vector3d p) {
+        if (p == null) return null;
+        return new Vector3d(p.getX(), p.getY(), p.getZ());
     }
 }

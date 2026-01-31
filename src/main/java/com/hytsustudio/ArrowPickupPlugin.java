@@ -7,7 +7,7 @@ import com.hytsustudio.Recoverarrows.ArrowMagnetSystem;
 
 import javax.annotation.Nonnull;
 
-public class ArrowPickupPlugin extends JavaPlugin {
+public final class ArrowPickupPlugin extends JavaPlugin {
 
     public ArrowPickupPlugin(@Nonnull JavaPluginInit init) {
         super(init);
@@ -15,6 +15,7 @@ public class ArrowPickupPlugin extends JavaPlugin {
 
     @Override
     protected void setup() {
+        // One system handles: tracking + pickup + optional magnet pull
         EntityStore.REGISTRY.registerSystem(new ArrowMagnetSystem());
     }
 }

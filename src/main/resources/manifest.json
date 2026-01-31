@@ -1,7 +1,7 @@
 {
     "Group": "HytsuStudio",
     "Name": "ArrowPickup",
-    "Version": "0.0.2",
+    "Version": "1.0.1",
     "Description": "Makes arrows persistent and pickable.",
     "Authors": [
         {
