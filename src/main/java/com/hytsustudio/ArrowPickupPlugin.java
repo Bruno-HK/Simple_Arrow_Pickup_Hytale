@@ -3,10 +3,11 @@ package com.hytsustudio;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+import com.hytsustudio.Recoverarrows.ArrowMagnetSystem;
 
 import javax.annotation.Nonnull;
 
-public class ArrowPickupPlugin extends JavaPlugin {
+public final class ArrowPickupPlugin extends JavaPlugin {
 
     public ArrowPickupPlugin(@Nonnull JavaPluginInit init) {
         super(init);
@@ -14,6 +15,7 @@ public class ArrowPickupPlugin extends JavaPlugin {
 
     @Override
     protected void setup() {
-        EntityStore.REGISTRY.registerSystem(new ArrowPickupSystem());
+        // One system handles: tracking + pickup + optional magnet pull
+        EntityStore.REGISTRY.registerSystem(new ArrowMagnetSystem());
     }
 }
