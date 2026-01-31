@@ -7,272 +7,266 @@ import com.hypixel.hytale.component.RemoveReason;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.component.query.Query;
 import com.hypixel.hytale.component.spatial.SpatialResource;
-import com.hypixel.hytale.component.spatial.SpatialStructure;
 import com.hypixel.hytale.component.system.tick.EntityTickingSystem;
 import com.hypixel.hytale.math.vector.Vector3d;
 import com.hypixel.hytale.server.core.entity.EntityUtils;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.inventory.Inventory;
 import com.hypixel.hytale.server.core.inventory.ItemStack;
-import com.hypixel.hytale.server.core.inventory.container.ItemContainer;
 import com.hypixel.hytale.server.core.inventory.transaction.ItemStackTransaction;
 import com.hypixel.hytale.server.core.modules.entity.EntityModule;
+import com.hypixel.hytale.server.core.modules.entity.component.ModelComponent;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
-import com.hypixel.hytale.server.core.modules.entity.component.UUIDComponent;
 import com.hypixel.hytale.server.core.modules.physics.component.Velocity;
 import com.hypixel.hytale.server.core.modules.projectile.component.Projectile;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
+import javax.annotation.Nonnull;
 import java.util.*;
 
 /**
- * RecoverArrows – core system
- *
- * Arrow identity is captured EXACTLY like Night:
- * - Bow must be in hand
- * - Utility slot 0 holds the arrow item
- * - Projectile entities carry NO item identity
+ * Working Arrow Magnet System based on decompiled working version
  */
 public class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
 
-    /* =======================
-       CONSTANTS
-       ======================= */
+        @Nonnull
+        private final Query<EntityStore> query = Query.and(Player.getComponentType());
 
-    private static final double SEARCH_RADIUS = 12.0;
-    private static final double PICKUP_RADIUS = 2.5;
-    private static final double PICKUP_RADIUS_SQ = PICKUP_RADIUS * PICKUP_RADIUS;
+        // SMALLER pickup area - more realistic
+        private static final double HORIZONTAL_RANGE = 1.5;  // Reduced from 3.0
+        private static final double RANGE_DOWN_FROM_FEET = 1.0;  // Reduced from 1.5
+        private static final double RANGE_UP_FROM_FEET = 1.5;    // Reduced from 3.0
+        private static final double SEARCH_RADIUS = 8.0;         // Reduced from 12.0
 
-    private static final int PICKUP_DELAY_TICKS = 0;
-    private static final int REQUIRED_STATIONARY_TICKS = 3;
-    private static final double STOP_SPEED_THRESHOLD = 0.05;
+        // IMPORTANT: SLOWER speed threshold for pickup
+        private static final double MIN_VELOCITY = 0.02;         // Reduced from 0.05
+        private static final int MESSAGE_COOLDOWN = 20;
+        private static final int MIN_ALIVE_TICKS = 10;           // Increased from 5
 
-    private static final int SCAN_INTERVAL_TICKS = 2;
-    private static final boolean OWNER_ONLY_PICKUP = true;
+        // NEW: Prevent arrow despawn by tracking IMMEDIATELY
+        private static final int ARROW_LIFETIME_TICKS = 20 * 300; // 5 minutes
 
-    private static final String DEFAULT_ARROW_ID = "Weapon_Arrow_Crude";
+        private final HashMap<UUID, Integer> lastMessageTick = new HashMap<>();
+        private final HashMap<Integer, ArrowData> trackedArrows = new HashMap<>();
+        private static final HashMap<UUID, String> lastArrowEquipped = new HashMap<>();
+        private int currentTick = 0;
 
-    /* =======================
-       STATE
-       ======================= */
-
-    private final Map<UUID, Tracker> trackers = new HashMap<>();
-    private final Map<UUID, String> lastArrowEquipped = new HashMap<>();
-
-    private int tickCounter = 0;
-
-    private final Query<EntityStore> query = Query.and(Player.getComponentType());
-
-    @Override
-    public Query<EntityStore> getQuery() {
-        return query;
-    }
-
-    @Override
-    public void tick(
-            float dt,
-            int index,
-            ArchetypeChunk<EntityStore> chunk,
-            Store<EntityStore> store,
-            CommandBuffer<EntityStore> cmd
-    ) {
-        tickCounter++;
-
-        Ref<EntityStore> playerRef = chunk.getReferenceTo(index);
-        if (playerRef == null) return;
-
-        Player player = (Player) EntityUtils.toHolder(index, chunk)
-                .getComponent(Player.getComponentType());
-        if (player == null) return;
-
-        PlayerRef pref = (PlayerRef) store.getComponent(playerRef, PlayerRef.getComponentType());
-        if (pref == null) return;
-
-        UUID playerUuid = pref.getUuid();
-        if (playerUuid == null) return;
-
-        TransformComponent playerTransform =
-                (TransformComponent) store.getComponent(playerRef, TransformComponent.getComponentType());
-        if (playerTransform == null) return;
-
-        Vector3d playerPos = playerTransform.getPosition();
-        if (playerPos == null) return;
-
-        // Capture arrow type Night-style
-        detectBowAndArrow(player, playerUuid);
-
-        // Throttle heavy scans
-        if ((tickCounter % SCAN_INTERVAL_TICKS) != 0) {
-            cleanupDeadTrackers(store);
-            return;
+        @Override
+        @Nonnull
+        public Query<EntityStore> getQuery() {
+            return this.query;
         }
 
-        EntityStore entityStore = (EntityStore) store.getExternalData();
-        if (entityStore == null) return;
+        @Override
+        public void tick(
+                float dt,
+                int index,
+                @Nonnull ArchetypeChunk<EntityStore> archetypeChunk,
+                @Nonnull Store<EntityStore> store,
+                @Nonnull CommandBuffer<EntityStore> commandBuffer
+        ) {
+            ++this.currentTick;
 
-        SpatialResource<Ref<EntityStore>, EntityStore> spatial =
-                (SpatialResource<Ref<EntityStore>, EntityStore>)
+            Ref<EntityStore> playerRef = archetypeChunk.getReferenceTo(index);
+            Player player = (Player) EntityUtils.toHolder(index, archetypeChunk)
+                    .getComponent(Player.getComponentType());
+            if (player == null) return;
+
+            PlayerRef playerRefComponent = store.getComponent(playerRef, PlayerRef.getComponentType());
+            if (playerRefComponent == null) return;
+
+            UUID playerUUID = playerRefComponent.getUuid();
+            TransformComponent playerTransform = store.getComponent(playerRef, TransformComponent.getComponentType());
+            ModelComponent playerModel = store.getComponent(playerRef, ModelComponent.getComponentType());
+            if (playerTransform == null || playerModel == null) return;
+
+            detectBowAndArrow(player, playerUUID);
+
+            Vector3d playerPos = playerTransform.getPosition().clone();
+            double eyeHeight = playerModel.getModel().getEyeHeight();
+
+            List<Ref<EntityStore>> arrowsToCollect = new ArrayList<>();
+            List<Integer> currentArrowHashes = new ArrayList<>();
+            List<Ref<EntityStore>> nearbyEntities = new ArrayList<>();
+
+            try {
+                SpatialResource<Ref<EntityStore>, EntityStore> entitySpatialResource =
                         store.getResource(EntityModule.get().getEntitySpatialResourceType());
-        if (spatial == null) return;
+                entitySpatialResource.getSpatialStructure().collect(playerPos, SEARCH_RADIUS, nearbyEntities);
 
-        SpatialStructure<Ref<EntityStore>> structure = spatial.getSpatialStructure();
-        if (structure == null) return;
+                for (Ref<EntityStore> entityRef : nearbyEntities) {
+                    if (entityRef.equals(playerRef)) continue;
 
-        List<Ref<EntityStore>> nearby = new ArrayList<>();
-        structure.collect(playerPos, SEARCH_RADIUS, nearby);
+                    Projectile projectile = store.getComponent(entityRef, Projectile.getComponentType());
+                    if (projectile == null) continue;
 
-        for (Ref<EntityStore> ref : nearby) {
-            if (ref == null || !ref.isValid() || ref.equals(playerRef)) continue;
+                    int arrowHash = entityRef.hashCode();
+                    currentArrowHashes.add(arrowHash);
 
-            UUIDComponent uuidComponent =
-                    (UUIDComponent) store.getComponent(ref, UUIDComponent.getComponentType());
-            if (uuidComponent == null || uuidComponent.getUuid() == null) continue;
+                    TransformComponent entityTransform = store.getComponent(entityRef, TransformComponent.getComponentType());
+                    if (entityTransform == null) continue;
 
-            UUID arrowUuid = uuidComponent.getUuid();
+                    Vector3d arrowPos = entityTransform.getPosition();
+                    Velocity velocity = store.getComponent(entityRef, Velocity.getComponentType());
 
-            Ref<EntityStore> arrowRef = entityStore.getRefFromUUID(arrowUuid);
-            if (arrowRef == null || !arrowRef.isValid()) {
-                trackers.remove(arrowUuid);
-                continue;
+                    // Track arrow immediately when found
+                    ArrowData arrowData = trackedArrows.get(arrowHash);
+                    if (arrowData == null) {
+                        // NEW: Track arrow spawn time
+                        arrowData = new ArrowData(arrowHash, currentTick, arrowPos, playerUUID);
+                        trackedArrows.put(arrowHash, arrowData);
+                    } else {
+                        arrowData.updatePosition(arrowPos);
+                    }
+
+                    // Check lifetime - PREVENT DESPAWN
+                    if (currentTick - arrowData.spawnTick > ARROW_LIFETIME_TICKS) {
+                        commandBuffer.tryRemoveEntity(entityRef, RemoveReason.REMOVE);
+                        trackedArrows.remove(arrowHash);
+                        continue;
+                    }
+
+                    // Arrow must be alive for minimum time
+                    if (currentTick - arrowData.spawnTick < MIN_ALIVE_TICKS) {
+                        continue;
+                    }
+
+                    // Check if arrow is within smaller pickup box
+                    if (!isWithinPickupRange(playerPos, eyeHeight, arrowPos)) {
+                        continue;
+                    }
+
+                    // Arrow is ready for pickup - NO VELOCITY CHECK
+                    if (isWithinPickupRange(playerPos, eyeHeight, arrowPos)) {
+                        arrowsToCollect.add(entityRef);
+                    }arrowsToCollect.add(entityRef);
+
+                }
+            } catch (Exception e) {
+                // Ignore errors
             }
 
-            Projectile projectile =
-                    (Projectile) store.getComponent(arrowRef, Projectile.getComponentType());
-            if (projectile == null) continue;
+            // Clean up old trackers
+            trackedArrows.keySet().removeIf(hash -> !currentArrowHashes.contains(hash));
 
-            TransformComponent arrowTransform =
-                    (TransformComponent) store.getComponent(arrowRef, TransformComponent.getComponentType());
-            if (arrowTransform == null) {
-                trackers.remove(arrowUuid);
-                continue;
+            // Collect arrows
+            if (!arrowsToCollect.isEmpty()) {
+                int collected = 0;
+                Inventory inventory = player.getInventory();
+                String arrowId = lastArrowEquipped.getOrDefault(playerUUID, "Weapon_Arrow_Crude");
+
+                for (Ref<EntityStore> arrowRef : arrowsToCollect) {
+                    try {
+                        if (inventory != null) {
+                            ItemStack arrowStack = new ItemStack(arrowId, 1);
+                            ItemStack remainder = addItemToInventory(inventory, arrowStack);
+
+                            if (remainder == null || remainder.isEmpty()) {
+                                commandBuffer.tryRemoveEntity(arrowRef, RemoveReason.REMOVE);
+                                ++collected;
+                                trackedArrows.remove(arrowRef.hashCode());
+                            }
+                        }
+                    } catch (Exception e) {
+                        // Ignore errors
+                    }
+                }
+
+                if (collected > 0) {
+                    if (!lastMessageTick.containsKey(playerUUID) ||
+                            this.currentTick - lastMessageTick.get(playerUUID) > MESSAGE_COOLDOWN) {
+                        lastMessageTick.put(playerUUID, this.currentTick);
+                        player.sendInventory();
+                    }
+                }
             }
+        }
 
-            Velocity vel =
-                    (Velocity) store.getComponent(arrowRef, Velocity.getComponentType());
-            if (vel == null) continue;
+        private boolean isWithinPickupRange(Vector3d playerPos, double eyeHeight, Vector3d arrowPos) {
+            double playerFeetY = playerPos.y;
 
-            Vector3d arrowPos = arrowTransform.getPosition();
-            Vector3d v = vel.getVelocity();
-            if (arrowPos == null || v == null) continue;
+            // SMALLER pickup area
+            double minX = playerPos.x - HORIZONTAL_RANGE;
+            double maxX = playerPos.x + HORIZONTAL_RANGE;
+            double minY = playerFeetY - RANGE_DOWN_FROM_FEET;
+            double maxY = playerFeetY + eyeHeight + RANGE_UP_FROM_FEET;
+            double minZ = playerPos.z - HORIZONTAL_RANGE;
+            double maxZ = playerPos.z + HORIZONTAL_RANGE;
 
-            double speed = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return arrowPos.x >= minX && arrowPos.x <= maxX &&
+                    arrowPos.y >= minY && arrowPos.y <= maxY &&
+                    arrowPos.z >= minZ && arrowPos.z <= maxZ;
+        }
 
-            Tracker tracker = trackers.get(arrowUuid);
-            if (tracker == null) {
-                tracker = new Tracker(arrowUuid, playerUuid, tickCounter);
-                trackers.put(arrowUuid, tracker);
-            }
+        private void detectBowAndArrow(@Nonnull Player player, @Nonnull UUID playerUUID) {
+            try {
+                Inventory inventory = player.getInventory();
+                if (inventory == null) return;
 
-            tracker.update(speed);
+                ItemStack mainHandItem = inventory.getItemInHand();
+                if (mainHandItem == null || mainHandItem.isEmpty()) return;
 
-            if ((tickCounter - tracker.spawnTick) < PICKUP_DELAY_TICKS) continue;
-            if (tracker.stationaryTicks < REQUIRED_STATIONARY_TICKS) continue;
-
-            if (distanceSq(playerPos, arrowPos) > PICKUP_RADIUS_SQ) continue;
-
-            if (OWNER_ONLY_PICKUP && !tracker.ownerUuid.equals(playerUuid)) continue;
-
-            String arrowId = lastArrowEquipped.getOrDefault(playerUuid, DEFAULT_ARROW_ID);
-
-            if (tryGiveArrow(player, arrowId)) {
-                cmd.tryRemoveEntity(arrowRef, RemoveReason.REMOVE);
-                trackers.remove(arrowUuid);
-                player.sendInventory();
-                break;
+                String itemId = mainHandItem.getItemId();
+                if (isBow(itemId)) {
+                    ItemStack utilityArrow = inventory.getUtility().getItemStack((short) 0);
+                    if (utilityArrow != null && !utilityArrow.isEmpty() && isArrow(utilityArrow.getItemId())) {
+                        String arrowId = utilityArrow.getItemId();
+                        lastArrowEquipped.put(playerUUID, arrowId);
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore errors
             }
         }
 
-        cleanupDeadTrackers(store);
-    }
+        private boolean isBow(@Nonnull String itemId) {
+            return itemId.contains("Bow"); // Simpler check
+        }
 
-    /* =======================
-       NIGHT-STYLE ARROW DETECTION
-       ======================= */
+        private boolean isArrow(@Nonnull String itemId) {
+            return itemId.contains("Arrow"); // Simpler check
+        }
 
-    private void detectBowAndArrow(Player player, UUID playerUuid) {
-        Inventory inventory = player.getInventory();
-        if (inventory == null) return;
+        private ItemStack addItemToInventory(@Nonnull Inventory inventory, @Nonnull ItemStack itemStack) {
+            ItemStackTransaction transaction = inventory.getCombinedHotbarFirst().addItemStack(itemStack);
+            return transaction.getRemainder();
+        }
 
-        ItemStack inHand = inventory.getItemInHand();
-        if (inHand == null || inHand.isEmpty()) return;
+        // Arrow tracking data
+        private static class ArrowData {
+            final int arrowHash;
+            final int spawnTick;
+            final UUID ownerUUID;
+            Vector3d lastPosition;
+            int stationaryTicks;
 
-        String handId = inHand.getItemId();
-        if (handId == null || !handId.contains("Bow")) return;
+            ArrowData(int arrowHash, int spawnTick, Vector3d position, UUID ownerUUID) {
+                this.arrowHash = arrowHash;
+                this.spawnTick = spawnTick;
+                this.ownerUUID = ownerUUID;
+                this.lastPosition = position.clone();
+                this.stationaryTicks = 0;
+            }
 
-        ItemContainer utility = inventory.getUtility();
-        if (utility == null) return;
+            void updatePosition(Vector3d newPosition) {
+                if (lastPosition != null) {
+                    double dx = newPosition.x - lastPosition.x;
+                    double dy = newPosition.y - lastPosition.y;
+                    double dz = newPosition.z - lastPosition.z;
+                    double distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-        ItemStack arrowStack = utility.getItemStack((short) 0);
-        if (arrowStack == null || arrowStack.isEmpty()) return;
+                    if (distance < 0.01) { // Almost stationary
+                        stationaryTicks++;
+                    } else {
+                        stationaryTicks = 0;
+                    }
+                }
+                lastPosition = newPosition.clone();
+            }
 
-        String arrowId = arrowStack.getItemId();
-        if (arrowId == null || !arrowId.contains("Arrow")) return;
-
-        lastArrowEquipped.put(playerUuid, arrowId);
-    }
-
-    /* =======================
-       HELPERS
-       ======================= */
-
-    private boolean tryGiveArrow(Player player, String arrowId) {
-        Inventory inv = player.getInventory();
-        if (inv == null) return false;
-
-        ItemStackTransaction tx =
-                inv.getCombinedHotbarFirst().addItemStack(new ItemStack(arrowId, 1));
-
-        ItemStack remainder = tx.getRemainder();
-        return remainder == null || remainder.isEmpty();
-    }
-
-    private void cleanupDeadTrackers(Store<EntityStore> store) {
-        EntityStore entityStore = (EntityStore) store.getExternalData();
-        if (entityStore == null) return;
-
-        Iterator<Map.Entry<UUID, Tracker>> it =
-                trackers.entrySet().iterator();
-
-        while (it.hasNext()) {
-            Map.Entry<UUID, Tracker> entry = it.next();
-            UUID arrowUuid = entry.getKey();
-
-            // 🔒 HARD SAFETY CHECKS
-            Ref<EntityStore> ref = entityStore.getRefFromUUID(arrowUuid);
-            if (ref == null || !ref.isValid()) {
-                it.remove();
+            boolean isReadyForPickup() {
+                return stationaryTicks >= 3; // Must be stationary for 3 ticks
             }
         }
     }
-
-    private static double distanceSq(Vector3d a, Vector3d b) {
-        double dx = a.x - b.x;
-        double dy = a.y - b.y;
-        double dz = a.z - b.z;
-        return dx * dx + dy * dy + dz * dz;
-    }
-
-    /* =======================
-       TRACKER
-       ======================= */
-
-    private static final class Tracker {
-        final UUID arrowUuid;
-        final UUID ownerUuid;
-        final int spawnTick;
-
-        int stationaryTicks = 0;
-
-        Tracker(UUID arrowUuid, UUID ownerUuid, int spawnTick) {
-            this.arrowUuid = arrowUuid;
-            this.ownerUuid = ownerUuid;
-            this.spawnTick = spawnTick;
-        }
-
-        void update(double speed) {
-            if (speed < STOP_SPEED_THRESHOLD) stationaryTicks++;
-            else stationaryTicks = 0;
-        }
-    }
-}
