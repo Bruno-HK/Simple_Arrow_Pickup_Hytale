@@ -14,6 +14,7 @@ import com.hypixel.hytale.server.core.modules.physics.component.Velocity;
 import com.hypixel.hytale.server.core.modules.projectile.component.Projectile;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
+import java.util.Iterator;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
@@ -21,10 +22,13 @@ import java.util.logging.Level;
 public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
 
     private static final String ALLOWED_ARROW_ITEM = "Weapon_Arrow_Crude";
+    private static final double VELOCITY_EPSILON = 0.001;
+    private static final int CLEANUP_INTERVAL_TICKS = 200; // ~10 seconds at 20 TPS
 
     private static final HytaleLogger LOG = HytaleLogger.get("ArrowPickup");
 
     private final Map<Ref<EntityStore>, Vector3d> lastPositions = new HashMap<>();
+    private int tickCounter = 0;
 
     @Override
     public Query<EntityStore> getQuery() {
@@ -39,6 +43,13 @@ public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
             Store<EntityStore> store,
             CommandBuffer<EntityStore> commands
     ) {
+        // Periodic cleanup of stale references
+        tickCounter++;
+        if (tickCounter >= CLEANUP_INTERVAL_TICKS) {
+            tickCounter = 0;
+            cleanupStaleReferences(store);
+        }
+
         Ref<EntityStore> ref = chunk.getReferenceTo(index);
 
         TransformComponent tx =
@@ -49,14 +60,15 @@ public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
                 store.getComponent(ref, ModelComponent.getComponentType());
 
         if (tx == null || vel == null || model == null || model.getModel() == null) {
+            lastPositions.remove(ref);
             return;
         }
 
         Vector3d pos = tx.getPosition();
         Vector3d last = lastPositions.get(ref);
 
-        // Only trigger once the arrow has stopped moving
-        if (last == null || !last.equals(pos) || vel.getVelocity().length() > 0.0) {
+        // Only trigger once the arrow has stopped moving (with epsilon for float comparison)
+        if (last == null || !last.equals(pos) || vel.getVelocity().length() > VELOCITY_EPSILON) {
             lastPositions.put(ref, pos.clone());
             return;
         }
@@ -113,5 +125,23 @@ public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
         lastPositions.remove(ref);
 
         LOG.at(Level.FINE).log("Recovered arrow at %s", pos);
+    }
+
+    /**
+     * Removes entries from lastPositions for entities that no longer exist.
+     * This prevents memory leaks when projectiles are destroyed by other means
+     * (despawn, world unload, killed by damage, etc.)
+     */
+    private void cleanupStaleReferences(Store<EntityStore> store) {
+        Iterator<Ref<EntityStore>> iterator = lastPositions.keySet().iterator();
+        while (iterator.hasNext()) {
+            Ref<EntityStore> ref = iterator.next();
+            // Check if the entity still exists by attempting to get a component
+            TransformComponent tx = store.getComponent(ref, TransformComponent.getComponentType());
+            if (tx == null) {
+                iterator.remove();
+                LOG.at(Level.FINER).log("Cleaned up stale arrow reference");
+            }
+        }
     }
 }
