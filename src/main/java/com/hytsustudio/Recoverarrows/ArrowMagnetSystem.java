@@ -73,7 +73,7 @@ public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
         Vector3d pos = tx.getPosition();
         Vector3d last = lastPositions.get(ref);
 
-        Vector3f velocity = vel.getVelocity();
+        Vector3f velocity = vel.getVelocity().toVector3f();
         // Only trigger once the arrow has stopped moving (with epsilon for float comparison)
         if (last == null || !last.equals(pos) || (velocity != null && velocity.length() > VELOCITY_EPSILON)) {
             lastPositions.put(ref, pos.clone());
