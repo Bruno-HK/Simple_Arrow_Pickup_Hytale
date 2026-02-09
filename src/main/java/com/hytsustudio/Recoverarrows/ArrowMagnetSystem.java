@@ -64,16 +64,21 @@ public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
             return;
         }
 
-        Vector3d pos = tx.getPosition();
-        Vector3d last = lastPositions.get(ref);
-
-        // Only trigger once the arrow has stopped moving (with epsilon for float comparison)
-        if (last == null || !last.equals(pos) || vel.getVelocity().length() > VELOCITY_EPSILON) {
-            lastPositions.put(ref, pos.clone());
+        String modelAssetId = model.getModel().getModelAssetId();
+        if (modelAssetId == null || !modelAssetId.contains("Arrow_")) {
+            lastPositions.remove(ref);
             return;
         }
 
-        String modelAssetId = model.getModel().getModelAssetId();
+        Vector3d pos = tx.getPosition();
+        Vector3d last = lastPositions.get(ref);
+
+        Vector3f velocity = vel.getVelocity();
+        // Only trigger once the arrow has stopped moving (with epsilon for float comparison)
+        if (last == null || !last.equals(pos) || (velocity != null && velocity.length() > VELOCITY_EPSILON)) {
+            lastPositions.put(ref, pos.clone());
+            return;
+        }
 
         int idx = modelAssetId.lastIndexOf("Arrow_");
         if (idx == -1) {
