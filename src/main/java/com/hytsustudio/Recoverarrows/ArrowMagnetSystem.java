@@ -141,11 +141,22 @@ public final class ArrowMagnetSystem extends EntityTickingSystem<EntityStore> {
         Iterator<Ref<EntityStore>> iterator = lastPositions.keySet().iterator();
         while (iterator.hasNext()) {
             Ref<EntityStore> ref = iterator.next();
-            // Check if the entity still exists by attempting to get a component
-            TransformComponent tx = store.getComponent(ref, TransformComponent.getComponentType());
-            if (tx == null) {
+
+            if (!ref.isValid()) {
                 iterator.remove();
-                LOG.at(Level.FINER).log("Cleaned up stale arrow reference");
+                LOG.at(Level.FINER).log("Cleaned up invalid arrow reference");
+                continue;
+            }
+
+            try {
+                TransformComponent tx = store.getComponent(ref, TransformComponent.getComponentType());
+                if (tx == null) {
+                    iterator.remove();
+                    LOG.at(Level.FINER).log("Cleaned up stale arrow reference");
+                }
+            } catch (IllegalStateException e) {
+                iterator.remove();
+                LOG.at(Level.FINER).log("Cleaned up arrow reference (entity removed)");
             }
         }
     }
